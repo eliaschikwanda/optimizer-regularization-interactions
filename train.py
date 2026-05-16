@@ -49,6 +49,12 @@ parser.add_argument("--input_val_bin", type=str, default=None)
 parser.add_argument("--output_json", type=str, default=None)
 parser.add_argument("--wandb_group", type=str, default=None)
 parser.add_argument("--dropout", type=float, default=0.1)
+parser.add_argument("--optimizer", choices=["adamw", "muon"], default="muon",
+                    help="Optimizer for matrix params: muon (default) or adamw. "
+                         "Other param groups (embeddings, lm_head, scalars) always use AdamW.")
+parser.add_argument("--matrix-lr-adamw", type=float, default=1e-3,
+                    help="Peak LR for matrix params when --optimizer adamw "
+                         "(before lr_multiplier scaling). Ignored if --optimizer muon.")
 args = parser.parse_args()
 
 # Resolve output path
@@ -72,6 +78,7 @@ DATA_DIR = "fineweb_data"
 
 # Base optimizer hyperparameters
 BASE_MATRIX_LR = args.matrix_lr
+BASE_MATRIX_LR_ADAMW = args.matrix_lr_adamw
 BASE_SCALAR_LR = args.scalar_lr
 BASE_EMBEDDING_LR = 0.3
 BASE_UNEMBEDDING_LR = 0.004
@@ -79,6 +86,7 @@ BASE_UNEMBEDDING_LR = 0.004
 # Apply LR multiplier if provided (scales all LRs uniformly)
 _lr_mult = args.lr_multiplier if args.lr_multiplier is not None else 1.0
 MATRIX_LR = BASE_MATRIX_LR * _lr_mult
+MATRIX_LR_ADAMW = BASE_MATRIX_LR_ADAMW * _lr_mult
 UNEMBEDDING_LR = BASE_UNEMBEDDING_LR * _lr_mult
 EMBEDDING_LR = BASE_EMBEDDING_LR * _lr_mult
 SCALAR_LR = BASE_SCALAR_LR * _lr_mult
@@ -335,8 +343,12 @@ class GPT(nn.Module):
         ]
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
-            param_groups.append(dict(kind='muon', params=group_params, lr=MATRIX_LR,
-                                     momentum=0.95, ns_steps=5, beta2=0.95, weight_decay=WEIGHT_DECAY))
+            if args.optimizer == "muon":
+                param_groups.append(dict(kind='muon', params=group_params, lr=MATRIX_LR,
+                                         momentum=0.95, ns_steps=5, beta2=0.95, weight_decay=WEIGHT_DECAY))
+            else:  # adamw
+                param_groups.append(dict(kind='adamw', params=group_params, lr=MATRIX_LR_ADAMW,
+                                         betas=ADAM_BETAS, eps=1e-10, weight_decay=WEIGHT_DECAY))
 
         Factory = DistMuonAdamW if ddp else MuonAdamW
         optimizer = Factory(param_groups)
@@ -737,6 +749,7 @@ print0(f"  seq_len={MAX_SEQ_LEN}, window_pattern={WINDOW_PATTERN}")
 print0(f"  total_batch_size={TOTAL_BATCH_SIZE}, device_batch_size={args.device_batch_size}")
 print0(f"  matrix_lr={MATRIX_LR}, scalar_lr={SCALAR_LR}, embedding_lr={EMBEDDING_LR}, unembedding_lr={UNEMBEDDING_LR}")
 print0(f"  weight_decay={WEIGHT_DECAY}, adam_betas={ADAM_BETAS}")
+print0(f"  optimizer={args.optimizer}" + (f", matrix_lr_adamw={MATRIX_LR_ADAMW}" if args.optimizer == "adamw" else ""))
 print0(f"  warmup_ratio={WARMUP_RATIO}, warmdown_ratio={WARMDOWN_RATIO}, final_lr_frac={FINAL_LR_FRAC}")
 print0(f"  num_epochs={args.num_epochs}, patience={args.patience}")
 print0(f"  dropout={args.dropout}")
