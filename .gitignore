@@ -1,2 +1,10 @@
 fineweb_data/
 wandb/
+checkpoints/
+logit_avg_ckpts/
+tiny_ckpts/
+runs/
+.venv
+.idea
+NOTES.md
+smoke_test.log
