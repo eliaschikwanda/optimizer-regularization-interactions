@@ -1,0 +1,6 @@
+Step 00000 | Val BPB: 3.516845 | Val Loss: 10.824685
+Step 00191 | Epoch 1 | Val BPB: 1.608211 | Val Loss: 4.948680
+Step 00382 | Epoch 2 | Val BPB: 1.335155 | Val Loss: 4.108166
+Peak memory: 9224.47 MiB
+Total training time: 34.41m
+Final train loss: 4.096508
