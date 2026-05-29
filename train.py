@@ -55,6 +55,14 @@ parser.add_argument("--optimizer", choices=["adamw", "muon"], default="muon",
 parser.add_argument("--matrix-lr-adamw", type=float, default=1e-3,
                     help="Peak LR for matrix params when --optimizer adamw "
                          "(before lr_multiplier scaling). Ignored if --optimizer muon.")
+parser.add_argument("--use-sam", action="store_true",
+                    help="Wrap the base optimizer with SAM (Foret et al. 2020): per step, "
+                         "ascend along grad by --sam-rho, recompute grad at the perturbed "
+                         "point, restore weights, then step the base optimizer with the "
+                         "perturbed-point grad. Doubles per-step wall-clock.")
+parser.add_argument("--sam-rho", type=float, default=0.05,
+                    help="SAM neighborhood radius (ascent step size). 0.05 is the default "
+                         "from Foret et al.; common range is 0.01-0.2.")
 args = parser.parse_args()
 
 # Resolve output path
@@ -749,7 +757,7 @@ print0(f"  seq_len={MAX_SEQ_LEN}, window_pattern={WINDOW_PATTERN}")
 print0(f"  total_batch_size={TOTAL_BATCH_SIZE}, device_batch_size={args.device_batch_size}")
 print0(f"  matrix_lr={MATRIX_LR}, scalar_lr={SCALAR_LR}, embedding_lr={EMBEDDING_LR}, unembedding_lr={UNEMBEDDING_LR}")
 print0(f"  weight_decay={WEIGHT_DECAY}, adam_betas={ADAM_BETAS}")
-print0(f"  optimizer={args.optimizer}" + (f", matrix_lr_adamw={MATRIX_LR_ADAMW}" if args.optimizer == "adamw" else ""))
+print0(f"  optimizer={args.optimizer}" + (f", matrix_lr_adamw={MATRIX_LR_ADAMW}" if args.optimizer == "adamw" else "") + (f", sam_rho={args.sam_rho}" if args.use_sam else ""))
 print0(f"  warmup_ratio={WARMUP_RATIO}, warmdown_ratio={WARMDOWN_RATIO}, final_lr_frac={FINAL_LR_FRAC}")
 print0(f"  num_epochs={args.num_epochs}, patience={args.patience}")
 print0(f"  dropout={args.dropout}")
@@ -846,12 +854,55 @@ while current_epoch <= args.num_epochs:
     # Training step
     synchronize()
     t0 = time.time()
-    for micro_step in range(grad_accum_steps):
-        with autocast_ctx:
-            loss = model(x, y)
-        train_loss = loss.detach()
-        (loss / grad_accum_steps).backward()
-        x, y, epoch = next(train_loader)
+    if args.use_sam:
+        # First pass: accumulate grad at current weights, buffer micro-batches.
+        # NOTE: under DDP this still all-reduces grads we throw away — fine on single GPU.
+        microbatches = []
+        for micro_step in range(grad_accum_steps):
+            with autocast_ctx:
+                loss = model(x, y)
+            train_loss = loss.detach()
+            (loss / grad_accum_steps).backward()
+            microbatches.append((x, y))
+            x, y, epoch = next(train_loader)
+
+        # Compute eps = rho * grad / ||grad|| and ascend
+        with torch.no_grad():
+            grad_sq = torch.zeros((), device=device)
+            for p in model.parameters():
+                if p.grad is not None:
+                    grad_sq += p.grad.float().pow(2).sum()
+            grad_norm = grad_sq.sqrt()
+            scale = args.sam_rho / (grad_norm + 1e-12)
+            sam_eps = []  # buffer perturbations for exact restoration
+            for p in model.parameters():
+                if p.grad is not None:
+                    e_p = (p.grad * scale).to(p.dtype)
+                    p.add_(e_p)
+                    sam_eps.append(e_p)
+                else:
+                    sam_eps.append(None)
+
+        # Second pass: replay same batches at perturbed weights
+        model.zero_grad(set_to_none=True)
+        for (xb, yb) in microbatches:
+            with autocast_ctx:
+                loss = model(xb, yb)
+            (loss / grad_accum_steps).backward()
+        train_loss = loss.detach()  # logged loss = loss at perturbed point
+
+        # Restore original weights
+        with torch.no_grad():
+            for p, e_p in zip(model.parameters(), sam_eps):
+                if e_p is not None:
+                    p.sub_(e_p)
+    else:
+        for micro_step in range(grad_accum_steps):
+            with autocast_ctx:
+                loss = model(x, y)
+            train_loss = loss.detach()
+            (loss / grad_accum_steps).backward()
+            x, y, epoch = next(train_loader)
 
     # Update optimizer
     lrm = get_lr_multiplier(step)
