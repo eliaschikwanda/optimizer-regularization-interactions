@@ -63,6 +63,9 @@ parser.add_argument("--use-sam", action="store_true",
 parser.add_argument("--sam-rho", type=float, default=0.05,
                     help="SAM neighborhood radius (ascent step size). 0.05 is the default "
                          "from Foret et al.; common range is 0.01-0.2.")
+parser.add_argument("--seed", type=int, default=42,
+                    help="Seed for torch + cuda RNG. Layer-2 sweep uses 3 seeds per cell "
+                         "to estimate run-to-run variance.")
 args = parser.parse_args()
 
 # Resolve output path
@@ -711,12 +714,12 @@ def evaluate_bpb(model, batches, steps, token_bytes):
 # Compute init
 ddp, ddp_rank, ddp_local_rank, ddp_world_size = get_dist_info()
 master_process = ddp_rank == 0
-torch.manual_seed(42)
+torch.manual_seed(args.seed)
 
 if ddp and torch.cuda.is_available():
     device = torch.device("cuda", ddp_local_rank)
     torch.cuda.set_device(device)
-    torch.cuda.manual_seed(42)
+    torch.cuda.manual_seed(args.seed)
     dist.init_process_group(backend="nccl", device_id=device)
     dist.barrier()
 else:
@@ -757,7 +760,7 @@ print0(f"  seq_len={MAX_SEQ_LEN}, window_pattern={WINDOW_PATTERN}")
 print0(f"  total_batch_size={TOTAL_BATCH_SIZE}, device_batch_size={args.device_batch_size}")
 print0(f"  matrix_lr={MATRIX_LR}, scalar_lr={SCALAR_LR}, embedding_lr={EMBEDDING_LR}, unembedding_lr={UNEMBEDDING_LR}")
 print0(f"  weight_decay={WEIGHT_DECAY}, adam_betas={ADAM_BETAS}")
-print0(f"  optimizer={args.optimizer}" + (f", matrix_lr_adamw={MATRIX_LR_ADAMW}" if args.optimizer == "adamw" else "") + (f", sam_rho={args.sam_rho}" if args.use_sam else ""))
+print0(f"  optimizer={args.optimizer}" + (f", matrix_lr_adamw={MATRIX_LR_ADAMW}" if args.optimizer == "adamw" else "") + (f", sam_rho={args.sam_rho}" if args.use_sam else "") + f", seed={args.seed}")
 print0(f"  warmup_ratio={WARMUP_RATIO}, warmdown_ratio={WARMDOWN_RATIO}, final_lr_frac={FINAL_LR_FRAC}")
 print0(f"  num_epochs={args.num_epochs}, patience={args.patience}")
 print0(f"  dropout={args.dropout}")
