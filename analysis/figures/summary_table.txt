@@ -1,0 +1,27 @@
+LAYER-2 SWEEP SUMMARY
+========================================================================
+
+Best (WD, dropout) cell per config — seed-averaged:
+
+  config             WD   drop      mean    ± std     wall
+  ------------------------------------------------------------
+  adamw            0.03    0.0    4.5719   0.0589   34.2m
+  adamw+SAM        0.03    0.0    4.6323   0.0009   68.8m
+  muon             0.30    0.0    3.9189   0.0053   34.5m
+  muon+SAM         0.30    0.0    3.9569   0.0013   68.7m
+
+Pairwise gap (row − col) at each config's best cell:
+
+                      adamw  adamw+SAM       muon   muon+SAM
+  adamw             +0.0000    -0.0605    +0.6529    +0.6150
+  adamw+SAM         +0.0605    +0.0000    +0.7134    +0.6754
+  muon              -0.6529    -0.7134    +0.0000    -0.0379
+  muon+SAM          -0.6150    -0.6754    +0.0379    +0.0000
+
+SAM verdict (lower = better):
+
+  AdamW+SAM vs AdamW: +0.0605  (SAM hurts)
+  Muon +SAM vs Muon : +0.0379  (SAM hurts)
+  Muon vs AdamW (best-vs-best): -0.6529
+  Muon+SAM vs AdamW+SAM        : -0.6754
+
